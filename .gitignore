@@ -1,0 +1,4 @@
+.cache
+build
+*.out
+fluid_dirty.cpp
