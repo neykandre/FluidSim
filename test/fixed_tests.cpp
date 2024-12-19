@@ -40,12 +40,12 @@ TEST(FixedTest, ConstructorTests) {
 }
 
 TEST(FixedTest, ArithmeticOperators) {
-    Fixed<64, 16> a(0.6f), b(0.3f);
+    Fixed<32, 16> a(0.6), b(0.3);
 
     // Test operator+=
     a += b;
     
-    EXPECT_EQ(a.v, );
+    EXPECT_EQ(a, 0.9);
 
     // Test operator-=
     a -= b;
@@ -106,7 +106,7 @@ TEST(FixedTest, Functions) {
     Fixed<32, 16> a(-5);
 
     // Test abs
-    Fixed<32, 16> b = abs(a);
+    Fixed<32, 16> b = a.abs();
     EXPECT_EQ(b.v, 5 << 16);
 
     // Test from_raw

@@ -2,3 +2,4 @@
 build
 *.out
 fluid_dirty.cpp
+field1

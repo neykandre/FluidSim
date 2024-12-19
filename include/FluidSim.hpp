@@ -1,14 +1,21 @@
 #pragma once
 
+#include "Array2d.hpp"
+#include "ThreadPool.hpp"
 #include "Types.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bits/ranges_algo.h>
 #include <cassert>
+#include <chrono>
+#include <cstddef>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <random>
 #include <type_traits>
 #include <vector>
@@ -22,45 +29,6 @@ struct StaticSize {
     static constexpr size_t value = N * K;
 };
 
-template <typename T>
-constexpr bool is_static = (T::value > 0);
-
-template <typename T, typename Size>
-struct Array2d {
-    using Arr_t = std::conditional_t<is_static<Size>, std::array<T, Size::value>,
-                                     std::vector<T>>;
-
-  public:
-    Array2d(size_t, size_t)
-        requires is_static<Size>
-    {};
-
-    Array2d(size_t rows, size_t cols)
-        requires(!is_static<Size>)
-        : rows(rows),
-          cols(cols) {
-        data.resize(rows * cols);
-    }
-
-    T& operator()(size_t i, size_t j)
-        requires is_static<Size>
-    {
-        return data[i * Size::cols + j];
-    }
-
-    T& operator()(size_t i, size_t j)
-        requires(!is_static<Size>)
-    {
-        return data[i * cols + j];
-    }
-
-    Arr_t data{};
-
-  private:
-    size_t rows;
-    size_t cols;
-};
-
 template <typename P_t, typename V_t, typename V_flow_t,
           typename Size = StaticSize<0, 0>>
 class FluidSim {
@@ -69,7 +37,8 @@ class FluidSim {
     using Arr_t = Array2d<T, Size>;
 
   public:
-    FluidSim(size_t rows, size_t cols, const std::string& path)
+    FluidSim(size_t rows, size_t cols, const std::string& path,
+             size_t num_thread = 0)
         : rows{ rows },
           cols{ cols },
           p{ rows, cols },
@@ -78,131 +47,34 @@ class FluidSim {
           velocity{ rows, cols },
           velocity_flow{ rows, cols },
           last_use{ rows, cols },
-          dirs{ rows, cols } {
+          dirs{ rows, cols },
+          g{ 0.01 }
+        //   pool{ num_thread } {
+        {
         read_field(path);
-    }
 
-    void run() { // TODO dummy run function
         rho[' '] = 0.01;
         rho['.'] = 1000;
-        P_t g    = 0.1;
 
-        for (size_t x = 0; x < rows; ++x) {
-            for (size_t y = 0; y < cols; ++y) {
-                if (field(x, y) == '#') {
-                    continue;
-                }
-                for (auto [dx, dy] : deltas) {
-                    dirs(x, y) += (field(x + dx, y + dy) != '#');
-                }
+        for_each_cell([&](size_t x, size_t y) {
+            if (field(x, y) == '#') {
+                return;
             }
-        }
-
-        for (size_t i = 0; i < T; ++i) {
-
-            P_t total_delta_p = 0;
-            // Apply external forces
-            for (size_t x = 0; x < rows; ++x) {
-                for (size_t y = 0; y < cols; ++y) {
-                    if (field(x, y) == '#') {
-                        continue;
-                    }
-                    if (field(x + 1, y) != '#') {
-                        velocity.add(x, y, 1, 0, g);
-                    }
-                }
+            for (auto [dx, dy] : deltas) {
+                dirs(x, y) += (field(x + dx, y + dy) != '#');
             }
+        });
+    }
 
-            // Apply forces from p
-            // std::memcpy(old_p, p, sizeof(p));
-            std::copy(p.data.begin(), p.data.end(), old_p.data.begin());
-            for (size_t x = 0; x < rows; ++x) {
-                for (size_t y = 0; y < cols; ++y) {
-                    if (field(x, y) == '#') {
-                        continue;
-                    }
-                    for (auto [dx, dy] : deltas) {
-                        int nx = x + dx, ny = y + dy;
-                        if (field(nx, ny) != '#' && old_p(nx, ny) < old_p(x, y)) {
-                            auto delta_p = old_p(x, y) - old_p(nx, ny);
-                            auto force   = delta_p;
-                            auto& contr  = velocity.get(nx, ny, -dx, -dy);
-                            if (contr * rho[(int)field(nx, ny)] >= force) {
-                                contr -= force / rho[(int)field(nx, ny)];
-                                continue;
-                            }
-                            force -= contr * rho[(int)field(nx, ny)];
-                            contr = 0;
-                            velocity.add(x, y, dx, dy,
-                                         force / rho[(int)field(x, y)]);
-                            p(x, y) -= force / dirs(x, y);
-                            total_delta_p -= force / dirs(x, y);
-                        }
-                    }
-                }
-            }
+    void run() {
+        auto start = std::chrono::system_clock::now();
+        for (size_t i = 0; i < TICKS; ++i) {
 
-            // Make flow from velocities
-            bool prop = false;
-            do {
-                UT += 2;
-                prop = 0;
-                for (size_t x = 0; x < rows; ++x) {
-                    for (size_t y = 0; y < cols; ++y) {
-                        if (field(x, y) != '#' && last_use(x, y) != UT) {
-                            auto [t, local_prop, _] = propagate_flow(x, y, 1);
-                            if (t > 0) {
-                                prop = 1;
-                            }
-                        }
-                    }
-                }
-            } while (prop);
-
-            // Recalculate p with kinetic energy
-            for (size_t x = 0; x < rows; ++x) {
-                for (size_t y = 0; y < cols; ++y) {
-                    if (field(x, y) == '#') {
-                        continue;
-                    }
-                    for (auto [dx, dy] : deltas) {
-                        auto old_v = velocity.get(x, y, dx, dy);
-                        auto new_v = velocity_flow.get(x, y, dx, dy);
-                        if (old_v > 0) {
-                            assert(new_v <= old_v);
-                            velocity.get(x, y, dx, dy) = new_v;
-                            auto force = (old_v - new_v) * rho[(int)field(x, y)];
-                            if (field(x, y) == '.') {
-                                force *= 0.8;
-                            }
-                            if (field(x + dx, y + dy) == '#') {
-                                p(x, y) += force / dirs(x, y);
-                                total_delta_p += force / dirs(x, y);
-                            } else {
-                                p(x + dx, y + dy) += force / dirs(x + dx, y + dy);
-                                total_delta_p += force / dirs(x + dx, y + dy);
-                            }
-                        }
-                    }
-                }
-            }
-
-            UT += 2;
-            prop = false;
-            for (size_t x = 0; x < rows; ++x) {
-                for (size_t y = 0; y < cols; ++y) {
-                    if (field(x, y) != '#' && last_use(x, y) != UT) {
-                        if (random01() < move_prob(x, y)) {
-                            prop = true;
-                            propagate_move(x, y, true);
-                        } else {
-                            propagate_stop(x, y, true);
-                        }
-                    }
-                }
-            }
-
-            if (prop) {
+            apply_external_forces();
+            apply_p_forces();
+            make_flow_from_vel();
+            recalc_p();
+            if (make_step()) {
                 std::cout << "Tick " << i << ":\n";
                 for (size_t x = 0; x < rows; ++x) {
                     for (size_t y = 0; y < cols; ++y) {
@@ -211,21 +83,18 @@ class FluidSim {
                     std::cout << '\n';
                 }
             }
-        }
-        // std::cout << "p_type: " << typeid(P_t).name() << std::endl;
-        // std::cout << "v_type: " << typeid(V_t).name() << std::endl;
-        // std::cout << "v_flow_type: " << typeid(V_flow_t).name() << std::endl;
-        // std::cout << "size: " << rows << "x" << cols << std::endl;
-        // std::cout << (is_static<Size> ? "static": "dynamic") << std::endl;
-        // std::cout << "Array_data_type: " << typeid(Arr_t<P_t>(0, 0).data).name()
-        // << std::endl; std::cout << std::endl;
 
-        // for (size_t i = 0; i < rows; ++i) {
-        //     for (size_t j = 0; j < cols; ++j) {
-        //         std::cout << field(i, j);
-        //     }
-        //     std::cout << std::endl;
-        // }
+            // if (i == 2000) {
+            //     break;
+            // }
+        }
+        auto end = std::chrono::system_clock::now();
+
+        std::cout << "Time: "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                           start)
+                         .count()
+                  << " ms\n";
     }
 
   private:
@@ -246,6 +115,101 @@ class FluidSim {
                       });
     }
 
+    void apply_external_forces() {
+        for_each_cell([&](size_t x, size_t y) {
+            if (field(x, y) == '#') {
+                return;
+            }
+            if (field(x + 1, y) != '#') {
+                velocity.add(x, y, 1, 0, g);
+            }
+        });
+    }
+
+    void apply_p_forces() {
+        std::copy(p.data.begin(), p.data.end(), old_p.data.begin());
+        for_each_cell([&](size_t x, size_t y) {
+            if (field(x, y) == '#') {
+                return;
+            }
+            for (auto [dx, dy] : deltas) {
+                int nx = x + dx, ny = y + dy;
+                auto&& field_cell = field(nx, ny);
+                if (field_cell != '#' && old_p(nx, ny) < old_p(x, y)) {
+                    auto force  = old_p(x, y) - old_p(nx, ny);
+                    auto& contr = velocity.get(nx, ny, -dx, -dy);
+                    if (contr * rho[(int)field_cell] >= force) {
+                        contr -= force / rho[(int)field_cell];
+                        continue;
+                    }
+                    force -= contr * rho[(int)field_cell];
+                    contr = 0;
+                    velocity.add(x, y, dx, dy, force / rho[(int)field(x, y)]);
+                    p(x, y) -= force / dirs(x, y);
+                }
+            }
+        });
+    }
+
+    void make_flow_from_vel() {
+        velocity_flow.v.clear();
+        bool prop = false;
+        do {
+            UT += 2;
+            prop = 0;
+            for_each_cell([&](size_t x, size_t y) {
+                if (field(x, y) != '#' && last_use(x, y) != UT) {
+                    auto [t, local_prop, _] = propagate_flow(x, y, 1);
+                    if (t > 0) {
+                        prop = 1;
+                    }
+                }
+            });
+        } while (prop);
+    }
+
+    void recalc_p() {
+        for_each_cell([&](size_t x, size_t y) {
+            if (field(x, y) == '#') {
+                return;
+            }
+            for (auto [dx, dy] : deltas) {
+                auto old_v = velocity.get(x, y, dx, dy);
+                auto new_v = velocity_flow.get(x, y, dx, dy);
+                if (old_v > 0) {
+                    assert(!(new_v > old_v));
+                    velocity.get(x, y, dx, dy) = static_cast<V_t>(new_v);
+                    auto force = (old_v - new_v) * rho[(int)field(x, y)];
+                    if (field(x, y) == '.') {
+                        force *= 0.8;
+                    }
+                    if (field(x + dx, y + dy) == '#') {
+                        p(x, y) += force / dirs(x, y);
+                    } else {
+                        p(x + dx, y + dy) +=
+                            force / dirs(x + dx, y + dy); // TODO atomic на p
+                    }
+                }
+            }
+        });
+    }
+
+    bool make_step() {
+        UT += 2;
+        bool prop = false;
+        for_each_cell([&](size_t x, size_t y) {
+            if (field(x, y) != '#' && last_use(x, y) != UT) {
+                if (random01() < move_prob(x, y)) {
+                    prop = true;
+                    propagate_move(x, y, true);
+                } else {
+                    propagate_stop(x, y, true);
+                }
+            }
+        });
+        return prop;
+    }
+
     std::tuple<V_t, bool, std::pair<int, int>> propagate_flow(int x, int y,
                                                               V_t lim) {
         last_use(x, y) = UT - 1;
@@ -255,16 +219,18 @@ class FluidSim {
             if (field(nx, ny) != '#' && last_use(nx, ny) < UT) {
                 auto cap  = velocity.get(x, y, dx, dy);
                 auto flow = velocity_flow.get(x, y, dx, dy);
-                if (flow == cap) { // TODO потенциально может ломаться
+                if (flow == cap) {
                     continue;
                 }
-                // assert(v >= velocity_flow.get(x, y, dx, dy));
-                auto vp = std::min(lim, cap - flow);
-                if (last_use(nx, ny) == UT - 1) {
+                auto vp = std::min(lim, static_cast<V_t>(cap - flow));
+                // int expected = UT - 1;
+                // if (last_use(nx, ny).compare_echange_weak(expected, UT)) {
+                //     velocity_flow.add(x, y, dx, dy, vp);
+                //     return { vp, 1, { nx, ny } };
+                // }
+                if (last_use(nx, ny) == UT - 1) { // TODO atomic на last_use
                     velocity_flow.add(x, y, dx, dy, vp);
                     last_use(x, y) = UT;
-                    // cerr << x << " " << y << " -> " << nx << " " << ny << " " <<
-                    // vp << " / " << lim << "\n";
                     return { vp, 1, { nx, ny } };
                 }
                 auto [t, prop, end] = propagate_flow(nx, ny, vp);
@@ -272,9 +238,7 @@ class FluidSim {
                 if (prop) {
                     velocity_flow.add(x, y, dx, dy, t);
                     last_use(x, y) = UT;
-                    // cerr << x << " " << y << " -> " << nx << " " << ny << " " << t
-                    // << " / " << lim << "\n";
-                    return { t, prop && end != std::pair(x, y), end };
+                    return { t, prop && end != std::make_pair(x, y), end };
                 }
             }
         }
@@ -282,10 +246,12 @@ class FluidSim {
         return { ret, 0, { 0, 0 } };
     }
 
-    auto random01() {
-        std::uniform_real_distribution<double> dist(0, 1);
-        double double_rnd = dist(rnd);
-        return V_t { double_rnd };
+    inline auto random01() {
+        if constexpr (std::is_floating_point_v<V_t>) {
+            return V_t{ dist(rnd) };
+        } else {
+            return V_t::random01(rnd());
+        }
     }
 
     void propagate_stop(int x, int y, bool force = false) {
@@ -293,7 +259,8 @@ class FluidSim {
             bool stop = true;
             for (auto [dx, dy] : deltas) {
                 int nx = x + dx, ny = y + dy;
-                if (field(nx, ny) != '#' && last_use(nx, ny) < UT - 1 &&
+                if (field(nx, ny) != '#' &&
+                    last_use(nx, ny) < UT - 1 && // TODO atomic на last_use
                     velocity.get(x, y, dx, dy) > 0) {
                     stop = false;
                     break;
@@ -306,11 +273,12 @@ class FluidSim {
         last_use(x, y) = UT;
         for (auto [dx, dy] : deltas) {
             int nx = x + dx, ny = y + dy;
-            if (field(nx, ny) == '#' || last_use(nx, ny) == UT ||
+            if (field(nx, ny) == '#' ||
+                last_use(nx, ny) == UT || // TODO atomic на last_use
                 velocity.get(x, y, dx, dy) > 0) {
                 continue;
             }
-            propagate_stop(nx, ny);
+            propagate_stop(nx, ny); // TODO atomic на propagate_stop (mutex)
         }
     }
 
@@ -319,7 +287,8 @@ class FluidSim {
         for (size_t i = 0; i < deltas.size(); ++i) {
             auto [dx, dy] = deltas[i];
             int nx = x + dx, ny = y + dy;
-            if (field(nx, ny) == '#' || last_use(nx, ny) == UT) {
+            if (field(nx, ny) == '#' ||
+                last_use(nx, ny) == UT) { // TODO atomic на last_use
                 continue;
             }
             auto v = velocity.get(x, y, dx, dy);
@@ -341,7 +310,8 @@ class FluidSim {
             for (size_t i = 0; i < deltas.size(); ++i) {
                 auto [dx, dy] = deltas[i];
                 int nx = x + dx, ny = y + dy;
-                if (field(nx, ny) == '#' || last_use(nx, ny) == UT) {
+                if (field(nx, ny) == '#' ||
+                    last_use(nx, ny) == UT) { // TODO atomic на last_use
                     tres[i] = sum;
                     continue;
                 }
@@ -365,27 +335,65 @@ class FluidSim {
             nx            = x + dx;
             ny            = y + dy;
             assert(velocity.get(x, y, dx, dy) > 0 && field(nx, ny) != '#' &&
-                   last_use(nx, ny) < UT);
+                   last_use(nx, ny) < UT); // TODO atomic на last_use
 
-            ret = (last_use(nx, ny) == UT - 1 || propagate_move(nx, ny, false));
+            ret = (last_use(nx, ny) == UT - 1 ||
+                   propagate_move(
+                       nx, ny,
+                       false)); // TODO atomic на last_use, propagate_move(mutex)
         } while (!ret);
-        last_use(x, y) = UT;
+        last_use(x, y) = UT; // TODO atomic на last_use
         for (size_t i = 0; i < deltas.size(); ++i) {
             auto [dx, dy] = deltas[i];
             int nx = x + dx, ny = y + dy;
-            if (field(nx, ny) != '#' && last_use(nx, ny) < UT - 1 &&
+            if (field(nx, ny) != '#' &&
+                last_use(nx, ny) < UT - 1 && // TODO atomic на last_use
                 velocity.get(x, y, dx, dy) < 0) {
-                propagate_stop(nx, ny);
+                propagate_stop(nx, ny); // TODO atomic на propagate_stop(mutex)
             }
         }
         if (ret) {
             if (!is_first) {
+                // std::lock_guard<std::mutex> lock(swap_mutex);
                 swap_with(x, y);
-                swap_with(nx, ny);
+                swap_with(nx, ny); // TODO atomic на swap
                 swap_with(x, y);
             }
         }
         return ret;
+    }
+
+    void for_each_cell(auto&& func) {
+        // if (pool.size() > 1) {
+        //     std::atomic<int> completed_tasks = 0;
+        //     size_t chunk_size                = rows / pool.size();
+
+        //     for (size_t t = 0; t < pool.size(); ++t) {
+        //         size_t start_row = t * chunk_size;
+        //         size_t end_row =
+        //             (t == pool.size() - 1) ? rows : (t + 1) * chunk_size;
+
+        //         pool.enqueue([this, start_row, end_row, &completed_tasks, &func]() {
+        //             for (size_t x = start_row; x < end_row; ++x) {
+        //                 for (size_t y = 0; y < cols; ++y) {
+        //                     func(x, y);
+        //                 }
+        //             }
+        //             completed_tasks.fetch_add(1, std::memory_order_relaxed);
+        //         });
+        //     }
+
+        //     // Ожидание завершения всех задач
+        //     while (completed_tasks.load(std::memory_order_relaxed) < pool.size()) {
+        //         std::this_thread::yield();
+        //     }
+        // } else {
+            for (size_t x = 0; x < rows; ++x) {
+                for (size_t y = 0; y < cols; ++y) {
+                    func(x, y);
+                }
+            // }
+        }
     }
 
   private:
@@ -393,23 +401,26 @@ class FluidSim {
         { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } }
     };
 
+    template <typename T>
     struct VectorField {
         VectorField(size_t rows, size_t cols)
             : v{ rows, cols } {
         }
 
-        Arr_t<std::array<V_t, deltas.size()>> v;
+        Arr_t<std::array<T, deltas.size()>> v;
 
-        V_t& add(int x, int y, int dx, int dy, V_t dv) {
+        T& add(int x, int y, int dx, int dy, auto dv) {
             return get(x, y, dx, dy) += dv;
         }
 
-        V_t& get(int x, int y, int dx, int dy) {
+        T& get(int x, int y, int dx, int dy) {
             size_t i = std::ranges::find(deltas, std::pair(dx, dy)) - deltas.begin();
             assert(i < deltas.size());
             return v(x, y)[i];
         }
     };
+
+    // ThreadPool pool;
 
     size_t rows;
     size_t cols;
@@ -417,14 +428,17 @@ class FluidSim {
     Arr_t<char> field;
     Arr_t<P_t> p;
     Arr_t<P_t> old_p;
-    std::array<P_t, 256> rho;
-    VectorField velocity;
-    VectorField velocity_flow;
+    std::array<P_t, 256> rho{};
+    VectorField<V_t> velocity;
+    VectorField<V_flow_t> velocity_flow;
     Arr_t<int> last_use;
     int UT{};
     std::mt19937 rnd{ 1337 };
+    std::uniform_real_distribution<float> dist{ 0, 1 };
     Arr_t<int> dirs;
-    static constexpr size_t T = 1'000'000;
+    static constexpr size_t TICKS = 1'000'000;
+    V_t g;
+    // std::mutex swap_mutex;
 
     char type{};
     P_t cur_p{};
@@ -436,3 +450,8 @@ class FluidSim {
     }
 };
 } // namespace Fluid
+
+// 85086472068ns
+// 87425479496ns
+// 117759099209ns
+// 35685063377ns

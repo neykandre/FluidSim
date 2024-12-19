@@ -6,8 +6,7 @@
 #include <string>
 #include <string_view>
 
-
-std::tuple<std::string, std::string, std::string> parse_arguments(int argc,
+std::tuple<std::string, std::string, std::string, std::string> parse_arguments(int argc,
                                                                   char* argv[]) {
     try {
         cxxopts::Options options(
@@ -16,7 +15,8 @@ std::tuple<std::string, std::string, std::string> parse_arguments(int argc,
             "p-type", "Type of parameter p-type", cxxopts::value<std::string>())(
             "v-type", "Type of parameter v-type", cxxopts::value<std::string>())(
             "v-flow-type", "Type of parameter v-flow-type",
-            cxxopts::value<std::string>());
+            cxxopts::value<std::string>())("field-path", "Path to the field",
+                                           cxxopts::value<std::string>());
 
         auto result = options.parse(argc, argv);
 
@@ -26,14 +26,15 @@ std::tuple<std::string, std::string, std::string> parse_arguments(int argc,
         }
 
         if (!result.count("p-type") || !result.count("v-type") ||
-            !result.count("v-flow-type")) {
+            !result.count("v-flow-type") || !result.count("field-path")) {
             throw std::runtime_error("Error: All parameters (--p-type, --v-type, "
-                                     "--v-flow-type) must be provided.");
+                                     "--v-flow-type, --field-path) must be provided.");
         }
 
         return { result["p-type"].as<std::string>(),
                  result["v-type"].as<std::string>(),
-                 result["v-flow-type"].as<std::string>() };
+                 result["v-flow-type"].as<std::string>(),
+                 result["field-path"].as<std::string>() };
 
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
@@ -48,11 +49,9 @@ int main(int argc, char** argv) {
     // Fluid::Fixed<32, 16> a(0.1);
     // Fluid::Fixed<64, 8> b(0.05);
     // std::cout << (a < 0.01) << std::endl;
-    auto [p_type, v_type, v_flow_type] = parse_arguments(argc, argv);
-
-    std::string path = "/home/andre/Documents/vscode/cpp_hse_2course/HW2_Fluid/base_field";
+    auto [p_type, v_type, v_flow_type, path] = parse_arguments(argc, argv);
 
     Mapping::run_sim(p_type, v_type, v_flow_type, path);
-    
+
     return 0;
 }

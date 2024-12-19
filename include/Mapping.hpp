@@ -7,11 +7,11 @@
 using namespace std::literals::string_view_literals;
 
 #ifndef TYPES
-#define TYPES DOUBLE
+#define TYPES FIXED(64, 16)
 #endif
 
 #ifndef SIZES
-#define SIZES S(36, 84)
+#define SIZES S(0,0)
 #endif
 
 #define STRINGIFY_IMPL(x) #x
@@ -75,7 +75,7 @@ constexpr auto sizes_names = parse_definition<sizes_count>(SIZES_STRING);
 #define DOUBLE double
 #define FLOAT float
 #define FIXED(x, y) Fluid::Fixed<x, y>
-#define FAST_FIXED(x, y) Fluid::Fast_Fixed<x, y>
+#define FAST_FIXED(x, y) Fluid::Fixed<x, y, true>
 #define S(x, y) Fluid::StaticSize<x, y>
 
 template <typename F, typename... Ts, size_t... Is>
@@ -95,17 +95,17 @@ constexpr bool choose_func(std::string_view name, F f, auto names,
 }
 
 template <typename... Ts>
-bool map(std::string_view arg, auto names, auto f) {
+bool map_string(std::string_view arg, auto names, auto f) {
     return choose_func<decltype(f), Ts...>(arg, f, names,
                                            std::index_sequence_for<Ts...>{});
 }
 
 void map_type(std::string_view arg, auto f) {
-    map<TYPES>(arg, types_names, f);
+    map_string<TYPES>(arg, types_names, f);
 }
 
 void map_size(std::string_view arg, auto f) {
-    if (!map<SIZES>(arg, sizes_names, f)) {
+    if (!map_string<SIZES>(arg, sizes_names, f)) {
         f.template operator()<Fluid::StaticSize<0, 0>>();
     }
 }
@@ -126,7 +126,7 @@ void run_sim(std::string_view p_type, std::string_view v_type,
     }
 
     std::string size =
-        "S(" + std::to_string(rows) + ", " + std::to_string(cols) + ")";
+        "S(" + std::to_string(rows) + "," + std::to_string(cols) + ")";
 
     bool p_type_was      = false;
     bool v_type_was      = false;
