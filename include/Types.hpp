@@ -1,6 +1,6 @@
 #pragma once
 
-#include <algorithm>
+#include <concepts>
 #include <cstdint>
 #include <ostream>
 #include <type_traits>
@@ -28,14 +28,53 @@ struct Fixed {
     constexpr Fixed(int v)
         : v(v << K) {
     }
-    constexpr Fixed(float f)
-        : v(f * (1 << K)) {
-    }
-    constexpr Fixed(double f)
+    template<std::floating_point T>
+    constexpr Fixed(T f)
         : v(f * (1 << K)) {
     }
     constexpr Fixed()
         : v(0) {
+    }
+
+    template <unsigned N2, unsigned K2>
+    explicit constexpr Fixed(const Fixed<N2, K2>& other) {
+        if constexpr (K > K2) {
+            v = other.v << (K - K2);
+        } else {
+            v = other.v >> (K2 - K);
+        }
+    }
+
+    Fixed& operator+=(const Fixed& other) {
+        v += other.v;
+        return *this;
+    }
+
+    Fixed& operator-=(const Fixed& other) {
+        v -= other.v;
+        return *this;
+    }
+
+    Fixed& operator*=(const Fixed& other) {
+        v = (v * other.v) >> K;
+        return *this;
+    }
+
+    Fixed& operator/=(const Fixed& other) {
+        if (other.v == 0) {
+            throw std::runtime_error("Division by zero in Fixed-point arithmetic");
+        }
+        v = (v << K) / other.v;
+        return *this;
+    }
+
+    constexpr auto operator-() const {
+        return Fixed::from_raw(-v);
+    }
+
+    template<std::floating_point T>
+    explicit operator T() const {
+        return static_cast<T>(v) / (1 << K);
     }
 
     static auto from_raw(type x) {
@@ -43,29 +82,64 @@ struct Fixed {
         ret.v = x;
         return ret;
     }
-
-    type v;
-
-    auto operator-() const {
-        return from_raw(-v);
-    }
     auto operator<=>(const Fixed&) const = default;
     bool operator==(const Fixed&) const  = default;
+
+    type v;
 };
+
+template <unsigned N, unsigned K, std::floating_point T>
+Fixed<N, K> operator+(Fixed<N, K> a, T b) {
+    return a += Fixed<N, K>(b);
+}
+
+template <unsigned N, unsigned K, std::floating_point T>
+Fixed<N, K> operator+(T a, Fixed<N, K> b) {
+    return Fixed<N, K>(a) += b;
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator-(Fixed<N, K> a, double b) {
+    return a -= Fixed<N, K>(b);
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator-(double a, Fixed<N, K> b) {
+    return Fixed<N, K>(a) -= b;
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator*(Fixed<N, K> a, double b) {
+    return a *= Fixed<N, K>(b);
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator*(double a, Fixed<N, K> b) {
+    return Fixed<N, K>(a) *= b;
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator/(Fixed<N, K> a, double b) {
+    return a /= Fixed<N, K>(b);
+}
+
+template <unsigned N, unsigned K>
+Fixed<N, K> operator/(double a, Fixed<N, K> b) {
+    return Fixed<N, K>(a) /= b;
+}
 
 template <unsigned N1, unsigned K1, unsigned N2, unsigned K2>
 auto operator+(Fixed<N1, K1> a, Fixed<N2, K2> b) {
-    Fixed<std::max(N1, N2), std::max(K1, K2)> ret;
+    using ResultType = Fixed<std::max(N1, N2), std::max(K1, K2)>;
+    ResultType result;
     if (K1 > K2) {
-        ret.v = b.v;
-        ret.v <<= K1 - K2;
-        ret.v += a.v;
+        result.v = b.v << (K1 - K2);
+        result.v += a.v;
     } else {
-        ret.v = a.v;
-        ret.v <<= K2 - K1;
-        ret.v += b.v;
+        result.v = a.v << (K2 - K1);
+        result.v += b.v;
     }
-    return ret;
+    return result;
 }
 
 template <unsigned N1, unsigned K1, unsigned N2, unsigned K2>
@@ -73,49 +147,42 @@ auto operator-(Fixed<N1, K1> a, Fixed<N2, K2> b) {
     return a + (-b);
 }
 
-// template <unsigned N1, unsigned K1, unsigned N2, unsigned K2>
-// auto operator*(Fixed<N1, K1> a, Fixed<N2, K2> b) {
-//     using doubled_type = TypeTraits<N1 + N2>::FastFixedType;
-//     doubled_type c = a.v * b.v;
+template <unsigned N1, unsigned K1, unsigned N2, unsigned K2>
+auto operator*(Fixed<N1, K1> a, Fixed<N2, K2> b) {
+    using ResultType = Fixed<std::max(N1, N2), K1 + K2>;
+    ResultType result;
+    result.v = (static_cast<ResultType::type>(a.v) * static_cast<ResultType::type>(b.v)) >> K1;
+    return result;
+}
 
-// }
+template <unsigned N1, unsigned K1, unsigned N2, unsigned K2>
+auto operator/(Fixed<N1, K1> a, Fixed<N2, K2> b) {
+    if (b.v == 0) {
+        throw std::runtime_error("Division by zero in Fixed-point arithmetic");
+    }
+    using ResultType = Fixed<std::max(N1, N2), K1 - K2>;
+    ResultType result;
+    result.v = (static_cast<ResultType::type>(a.v) << K1) / b.v;
+    return result;
+}
 
-// Fixed operator/(Fixed a, Fixed b) {
-//     return Fixed::from_raw(((int64_t)a.v << 16) / b.v);
-// }
 
-// Fixed& operator+=(Fixed& a, Fixed b) {
-//     return a = a + b;
-// }
-
-// Fixed& operator-=(Fixed& a, Fixed b) {
-//     return a = a - b;
-// }
-
-// Fixed& operator*=(Fixed& a, Fixed b) {
-//     return a = a * b;
-// }
-
-// Fixed& operator/=(Fixed& a, Fixed b) {
-//     return a = a / b;
-// }
-
-// Fixed operator-(Fixed x) {
-//     return Fixed::from_raw(-x.v);
-// }
-
-// Fixed abs(Fixed x) {
-//     if (x.v < 0) {
-//         x.v = -x.v;
-//     }
-//     return x;
-// }
+template<unsigned N, unsigned K>
+Fixed<N, K> abs(Fixed<N, K> x) {
+    if (x.v < 0) {
+        x.v = -x.v;
+    }
+    return x;
+}
 
 template <unsigned N, unsigned K>
 std::ostream& operator<<(std::ostream& out, Fixed<N, K> x) {
     return out << x.v / (double)(1 << K);
 }
 
-// template <int N, int K>
-// struct Fast_Fixed {};
+template<unsigned N, unsigned K>
+struct Fast_Fixed {
+
+};
+
 } // namespace Fluid
