@@ -1,7 +1,10 @@
 #pragma once
 
 #include "FluidSim.hpp"
+#include "Types.hpp"
 #include <array>
+#include <csignal>
+#include <string>
 #include <string_view>
 
 using namespace std::literals::string_view_literals;
@@ -11,15 +14,13 @@ using namespace std::literals::string_view_literals;
 #endif
 
 #ifndef SIZES
-#define SIZES S(0,0)
+#define SIZES S(0, 0)
 #endif
 
 #define STRINGIFY_IMPL(x) #x
 #define STRINGIFY(x) STRINGIFY_IMPL(x)
 #define TYPES_STRING STRINGIFY((TYPES))
 #define SIZES_STRING STRINGIFY((SIZES))
-
-namespace Mapping {
 
 constexpr std::string_view erase_paren(std::string_view input) {
     std::string_view type = input;
@@ -78,84 +79,133 @@ constexpr auto sizes_names = parse_definition<sizes_count>(SIZES_STRING);
 #define FAST_FIXED(x, y) Fluid::Fixed<x, y, true>
 #define S(x, y) Fluid::StaticSize<x, y>
 
-template <typename F, typename... Ts, size_t... Is>
-constexpr bool choose_func(std::string_view name, F f, auto names,
-                           std::index_sequence<Is...>) {
-    bool was_found = false;
-    (
-        [&]<size_t i> {
-            if (names[i] == name) {
-                was_found = true;
-                f.template operator()<std::remove_cvref_t<
-                    std::tuple_element_t<i, std::tuple<Ts...>>>>();
-            }
-        }.template operator()<Is>(),
-        ...);
-    return was_found;
-}
+class Mapper {
 
-template <typename... Ts>
-bool map_string(std::string_view arg, auto names, auto f) {
-    return choose_func<decltype(f), Ts...>(arg, f, names,
-                                           std::index_sequence_for<Ts...>{});
-}
-
-void map_type(std::string_view arg, auto f) {
-    map_string<TYPES>(arg, types_names, f);
-}
-
-void map_size(std::string_view arg, auto f) {
-    if (!map_string<SIZES>(arg, sizes_names, f)) {
-        f.template operator()<Fluid::StaticSize<0, 0>>();
+    template <typename F, typename... Ts, size_t... Is>
+    constexpr static bool choose_func(std::string_view name, F f, auto names,
+                                      std::index_sequence<Is...>) {
+        bool was_found = false;
+        (
+            [&]<size_t i> {
+                if (names[i] == name) {
+                    was_found = true;
+                    f.template operator()<std::remove_cvref_t<
+                        std::tuple_element_t<i, std::tuple<Ts...>>>>();
+                }
+            }.template operator()<Is>(),
+            ...);
+        return was_found;
     }
-}
 
-void run_sim(std::string_view p_type, std::string_view v_type,
-             std::string_view v_flow_type, const std::string& path) {
-    std::ifstream file(path);
-    assert(file.is_open());
-    size_t rows{}, cols{};
-    while (!file.eof()) {
-        std::string line;
-        std::getline(file, line);
-        if (rows > 0) {
-            assert(cols == line.size());
+    template <typename... Ts>
+    bool map_string(std::string_view arg, auto names, auto f) {
+        return choose_func<decltype(f), Ts...>(arg, f, names,
+                                               std::index_sequence_for<Ts...>{});
+    }
+
+    void map_type(std::string_view arg, auto f) {
+        map_string<TYPES>(arg, types_names, f);
+    }
+
+    void map_size(std::string_view arg, auto f) {
+        if (!map_string<SIZES>(arg, sizes_names, f)) {
+            f.template operator()<Fluid::StaticSize<0, 0>>();
         }
-        rows++;
-        cols = line.size();
     }
 
-    std::string size =
-        "S(" + std::to_string(rows) + "," + std::to_string(cols) + ")";
 
-    bool p_type_was      = false;
-    bool v_type_was      = false;
-    bool v_flow_type_was = false;
+static std::function<void(int)> shutdown_handler;
+static void signal_handler(int signal) {
+    shutdown_handler(signal);
+}
 
-    map_type(p_type, [&]<typename T1> {
-        p_type_was = true;
-        map_type(v_type, [&]<typename T2> {
-            v_type_was = true;
-            map_type(v_flow_type, [&]<typename T3> {
-                v_flow_type_was = true;
-                map_size(size, [&]<typename S> {
-                    Fluid::FluidSim<T1, T2, T3, S> sim(rows, cols, path);
-                    sim.run();
+  public:
+    Mapper() = default;
+
+    explicit Mapper(const std::string& p_type, const std::string& v_type,
+                    const std::string& v_flow_type, const ::std::string& path)
+        : m_p_type(p_type),
+          m_v_type(v_type),
+          m_v_flow_type(v_flow_type) {
+        std::ifstream file(path);
+        assert(file.is_open());
+        size_t rows{}, cols{};
+        while (!file.eof()) {
+            std::string line;
+            std::getline(file, line);
+            if (rows > 0) {
+                assert(cols == line.size());
+            }
+            rows++;
+            cols = line.size();
+        }
+
+        m_rows = rows;
+        m_cols = cols;
+    }
+
+    explicit Mapper(const std::string& load_path) {
+        std::ifstream file(load_path);
+        assert(file.is_open());
+        file >> m_p_type >> m_v_type >> m_v_flow_type >> m_rows >> m_cols;
+    }
+
+    void map_instance(auto f) {
+        bool p_type_was      = false;
+        bool v_type_was      = false;
+        bool v_flow_type_was = false;
+
+        std::string size =
+            "S(" + std::to_string(m_rows) + "," + std::to_string(m_cols) + ")";
+
+        map_type(m_p_type, [&]<typename T1> {
+            p_type_was = true;
+            map_type(m_v_type, [&]<typename T2> {
+                v_type_was = true;
+                map_type(m_v_flow_type, [&]<typename T3> {
+                    v_flow_type_was = true;
+                    map_size(size, [&]<typename S> {
+                        
+                        f.template operator()<Fluid::FluidSim<T1, T2, T3, S>>();
+                    });
                 });
-                // std::cout << sizeof(FluidSim<T1, T2, T3>) << std::endl;
             });
         });
-    });
 
-    if (!p_type_was) {
-        std::cerr << "Error: Unknown type: " << p_type << std::endl;
+        if (!p_type_was) {
+            std::cerr << "Error: Unknown type: " << m_p_type << std::endl;
+        }
+        if (!v_type_was) {
+            std::cerr << "Error: Unknown type: " << m_v_type << std::endl;
+        }
+        if (!v_flow_type_was) {
+            std::cerr << "Error: Unknown type: " << m_v_flow_type << std::endl;
+        }
     }
-    if (!v_type_was) {
-        std::cerr << "Error: Unknown type: " << v_type << std::endl;
-    }
-    if (!v_flow_type_was) {
-        std::cerr << "Error: Unknown type: " << v_flow_type << std::endl;
-    }
-}
 
-} // namespace Mapper
+    size_t get_rows() const {
+        return m_rows;
+    }
+    size_t get_cols() const {
+        return m_cols;
+    }
+
+    std::string get_p_type() const {
+        return m_p_type;
+    }
+
+    std::string get_v_type() const {
+        return m_v_type;
+    }
+
+    std::string get_v_flow_type() const {
+        return m_v_flow_type;
+    }
+
+  private:
+    std::string m_p_type;
+    std::string m_v_type;
+    std::string m_v_flow_type;
+    size_t m_rows;
+    size_t m_cols;
+};

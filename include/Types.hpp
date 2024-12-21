@@ -1,5 +1,6 @@
 #pragma once
 
+#include "nlohmann/json.hpp"
 #include <concepts>
 #include <cstdint>
 #include <ostream>
@@ -192,6 +193,16 @@ T operator*(T x, const Fixed<N, K, F>& y) {
 template <std::floating_point T, unsigned N, unsigned K, bool F>
 T operator/(T x, const Fixed<N, K, F>& y) {
     return x /= y;
+}
+
+template<unsigned N, unsigned K, bool F>
+void to_json(nlohmann::json& j, const Fixed<N, K, F>& a) {
+    j = a.v;
+}
+
+template<unsigned N, unsigned K, bool F>
+void from_json(const nlohmann::json& j, Fixed<N, K, F>& a) {
+    a.v = j.get<typename Fixed<N, K, F>::type>();
 }
 
 } // namespace Fluid

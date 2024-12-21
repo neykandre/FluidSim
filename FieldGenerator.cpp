@@ -1,3 +1,4 @@
+#include <cassert>
 #include <fstream>
 #include <random>
 #include <string>
@@ -12,7 +13,7 @@ public:
 
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, 2);
+        std::uniform_int_distribution<> dis(0, 10);
 
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -21,11 +22,14 @@ public:
                 } else {
                     switch (dis(gen)) {
                         case 0: file << '#'; break;  // Wall
-                        case 1: file << '.'; break;  // Water
-                        case 2: file << ' '; break;  // Empty
+                        case 1:
+                        case 2:
+                        case 3: file << '.'; break;  // Water
+                        default: file << ' '; break;  // Empty
                     }
                 }
             }
+            if (y < height - 1)
             file << '\n';
         }
 
@@ -34,7 +38,8 @@ public:
 };
 
 
-int main () {
-    FieldGenerator::generateField("field1", 1920, 1080);
+int main (int argc, char** argv) {
+    assert(argc == 3);
+    FieldGenerator::generateField("test_field", std::stoi(argv[2]), std::stoi(argv[1]));
     return 0;
 }

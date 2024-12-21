@@ -3,3 +3,5 @@ build
 *.out
 fluid_dirty.cpp
 field1
+fluid_dirty
+test_field
