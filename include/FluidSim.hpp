@@ -1,9 +1,10 @@
 #pragma once
 
 #include "Array2d.hpp"
+#include "ConcurentVector.h"
 #include <algorithm>
 #include <array>
-#include <bits/ranges_algo.h>
+#include <barrier>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
@@ -13,8 +14,9 @@
 #include <iostream>
 #include <iterator>
 #include <nlohmann/json.hpp>
-#include <omp.h>
 #include <random>
+#include <string>
+#include <thread>
 #include <type_traits>
 
 namespace Fluid {
@@ -34,7 +36,7 @@ class FluidSim {
     using Arr_t = Array2d<T, Size>;
 
   public:
-    FluidSim(size_t rows, size_t cols)
+    FluidSim(size_t rows, size_t cols, size_t num_workers = 1)
         : rows{ rows },
           cols{ cols },
           p{ rows, cols },
@@ -44,9 +46,55 @@ class FluidSim {
           velocity_flow{ rows, cols },
           last_use{ rows, cols },
           dirs{ rows, cols },
+          num_workers{ num_workers },
+          start_point{ static_cast<ptrdiff_t>(num_workers + 1) },
+          end_point{ static_cast<ptrdiff_t>(num_workers + 1) },
           g{ 0.01 } {
+
+            if constexpr (is_static<Size>) {
+                std::cout << "Using static size: (" << Size::rows << ", " << Size::cols << ")" <<  std::endl;
+            } else {
+                std::cout << "Using dynamic size: (" << rows << ", " << cols << ")"
+                          << std::endl;
+            }
+
         rho[' '] = 0.01;
         rho['.'] = 1000;
+        calc_borders();
+
+        for (size_t i = 0; i < num_workers; ++i) {
+            threads.emplace_back([&, i]() {
+                while (true) {
+                    start_point.arrive_and_wait();
+
+                    size_t ly = borders[i].first.first;
+                    size_t ry = borders[i].second.first;
+                    size_t lx = borders[i].first.second;
+                    size_t rx = borders[i].second.second;
+
+                    for (size_t x = lx; x <= rx; ++x) {
+                        for (size_t y = ly; y <= ry; ++y) {
+                            if (field(x, y) != '#' &&
+                                last_use(x, y) != offset<false>(0)) {
+                                auto [ret, l, _] =
+                                    propagate_flow<false>(x, y, 1, lx, rx, ly, ry);
+                                if (ret > 0) {
+                                    prop = 1;
+                                }
+                            }
+                        }
+                    }
+
+                    end_point.arrive_and_wait();
+                }
+            });
+        }
+    }
+
+    ~FluidSim() {
+        for (auto&& t : threads) {
+            t.detach();
+        }
     }
 
     int get_tick() const {
@@ -96,11 +144,6 @@ class FluidSim {
                     std::cout << '\n';
                 }
             }
-
-            // if (tick == 5) {
-            //     break;
-            // }
-            // std::cout << std::endl;
         }
         auto end = std::chrono::system_clock::now();
 
@@ -165,10 +208,6 @@ class FluidSim {
         //         std::chrono::duration_cast<std::chrono::microseconds>(step_end -
         //                                                               step_start)
         //             .count();
-
-        //     if (tick == 1000) {
-        //         break;
-        //     }
         // }
 
         // auto total_end = std::chrono::high_resolution_clock::now();
@@ -181,9 +220,9 @@ class FluidSim {
         //           << " ms\n";
         // std::cout << "apply_external_forces total time: "
         //           << total_external_forces_time << " µs\n";
-        // std::cout << "apply_p_forces total time: " << total_p_forces_time
-        //           << " µs\n ";
-        // std::cout << "make_flow_from_vel total time: " << total_make_flow_time
+        // std::cout << "apply_p_forces total time: " << total_p_forces_time << "
+        // µs\n"; std::cout << "make_flow_from_vel total time: " <<
+        // total_make_flow_time
         //           << " µs\n";
         // std::cout << "recalc_p total time: " << total_recalc_p_time << " µs\n";
         // std::cout << "make_step total time: " << total_make_step_time << " µs\n";
@@ -224,6 +263,21 @@ class FluidSim {
     }
 
   private:
+    void calc_borders() {
+        size_t backet_size = cols / num_workers;
+
+        for (size_t i = 0; i < num_workers; ++i) {
+            if (i == num_workers - 1) {
+                borders.emplace_back(std::make_pair(i * backet_size, 0),
+                                     std::make_pair(cols - 1, rows - 1));
+            } else {
+                borders.emplace_back(
+                    std::make_pair(i * backet_size, 0),
+                    std::make_pair((i + 1) * backet_size - 2, rows - 1));
+            }
+        }
+    }
+
     void apply_external_forces() {
         for_each_cell([&](size_t x, size_t y) {
             if (field(x, y) == '#') {
@@ -262,18 +316,21 @@ class FluidSim {
 
     void make_flow_from_vel() {
         velocity_flow.v.clear();
-        bool prop = false;
         do {
-            UT += 2;
+            UT += 4;
             prop = 0;
-            for_each_cell([&](size_t x, size_t y) {
-                if (field(x, y) != '#' && last_use(x, y) != UT) {
-                    auto [t, local_prop, _] = propagate_flow(x, y, 1);
-                    if (t > 0) {
-                        prop = 1;
-                    }
+
+            start_point.arrive_and_wait();
+            end_point.arrive_and_wait();
+
+            for (auto&& [x, y] : edges_points) {
+                auto [t, local_prop, _] = propagate_flow<true>(x, y, 1);
+                if (t > 0) {
+                    prop = 1;
                 }
-            });
+            }
+
+            edges_points.clear();
         } while (prop);
     }
 
@@ -318,41 +375,61 @@ class FluidSim {
         return prop;
     }
 
-    std::tuple<V_t, bool, std::pair<int, int>> propagate_flow(int x, int y,
-                                                              V_t lim) {
+    template <bool edges>
+    size_t offset(size_t local_offset) const {
+        if constexpr (edges) {
+            return UT - local_offset;
+        } else {
+            return UT - local_offset - 2;
+        }
+    }
 
-        last_use(x, y) = UT - 1;
+    template <bool edges>
+    std::tuple<V_flow_t, bool, std::pair<int, int>> propagate_flow(
+        int x, int y, V_flow_t lim, int lx = 0, int rx = 0, int ly = 0, int ry = 0) {
 
-        V_t ret = 0;
+        last_use(x, y) = offset<edges>(1);
+
+        V_flow_t ret = 0;
         for (auto [dx, dy] : deltas) {
             int nx = x + dx, ny = y + dy;
-            if (field(nx, ny) != '#' && last_use(nx, ny) < UT) {
+            if (field(nx, ny) != '#' && last_use(nx, ny) < offset<edges>(0)) {
                 auto cap  = velocity.get(x, y, dx, dy);
                 auto flow = velocity_flow.get(x, y, dx, dy);
                 if (flow == cap) {
                     continue;
                 }
-                auto vp = std::min(lim, static_cast<V_t>(cap - flow));
-                if (last_use(nx, ny) == UT - 1) {
+
+                if constexpr (!edges) {
+                    if (!(lx <= nx && nx <= rx && ly <= ny && ny <= ry)) {
+                        edges_points.emplace_back(nx, ny);
+                        continue;
+                    }
+                }
+
+                auto vp = std::min(lim, static_cast<V_flow_t>(cap - flow));
+                if (last_use(nx, ny) == offset<edges>(1)) {
                     velocity_flow.add(x, y, dx, dy, vp);
 
-                    last_use(x, y) = UT;
+                    last_use(x, y) = offset<edges>(0);
+
                     return { vp, 1, { nx, ny } };
                 }
 
-                auto [t, prop, end] = propagate_flow(nx, ny, vp);
+                auto [t, prop, end] =
+                    propagate_flow<edges>(nx, ny, vp, lx, rx, ly, ry);
 
                 ret += t;
                 if (prop) {
                     velocity_flow.add(x, y, dx, dy, t);
 
-                    last_use(x, y) = UT;
+                    last_use(x, y) = offset<edges>(0);
 
                     return { t, prop && end != std::make_pair(x, y), end };
                 }
             }
         }
-        last_use(x, y) = UT;
+        last_use(x, y) = offset<edges>(0);
 
         return { ret, 0, { 0, 0 } };
     }
@@ -457,9 +534,7 @@ class FluidSim {
         }
         if (ret) {
             if (!is_first) {
-                swap_with(x, y);
-                swap_with(nx, ny);
-                swap_with(x, y);
+                swap_with(x, y, nx, ny);
             }
         }
         return ret;
@@ -491,17 +566,19 @@ class FluidSim {
         }
 
         T& get(int x, int y, int dx, int dy) {
-            // for (int i = 0; i < deltas.size(); ++i) {
-            //     if (deltas[i].first == dx && deltas[i].second == dy) return
-            //     v(x, y)[i];
-            // }
-            // assert(false && "Invalid direction");
-            size_t i =
-                std::ranges::find(deltas, std::make_pair(dx, dy)) - deltas.begin();
-            assert(i < deltas.size());
-            return v(x, y)[i];
+            return v(x, y)[((dy & 1) << 1) | (((dx & 1) & ((dx & 2) >> 1)) |
+                                              ((dy & 1) & ((dy & 2) >> 1)))];
         }
     };
+
+    size_t num_workers;
+    std::barrier<> start_point;
+    std::barrier<> end_point;
+    std::vector<std::thread> threads;
+    std::vector<std::pair<std::pair<size_t, size_t>, std::pair<size_t, size_t>>>
+        borders;
+    ConcurrentVector<std::pair<size_t, size_t>> edges_points;
+    bool prop;
 
     size_t rows;
     size_t cols;
@@ -521,13 +598,10 @@ class FluidSim {
     static constexpr size_t TICKS = 1'000'000;
     V_t g;
 
-    char type{};
-    P_t cur_p{};
-    std::array<V_t, deltas.size()> v{};
-    void swap_with(int x, int y) {
-        std::swap(field(x, y), type);
-        std::swap(p(x, y), cur_p);
-        std::swap(velocity.v(x, y), v);
+    void swap_with(int x, int y, int nx, int ny) {
+        std::swap(field(x, y), field(nx, ny));
+        std::swap(p(x, y), p(nx, ny));
+        std::swap(velocity.v(x, y), velocity.v(nx, ny));
     }
 };
 } // namespace Fluid

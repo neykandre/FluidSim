@@ -5,7 +5,12 @@ project(Fluid)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+
 include(FetchContent)
+
+# set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
 FetchContent_Declare(
     cxxopts
@@ -16,12 +21,22 @@ FetchContent_MakeAvailable(cxxopts)
 FetchContent_Declare(
     nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.2 # Укажите актуальную версию
+    GIT_TAG v3.11.2
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-add_compile_definitions("TYPES=FIXED(64,8), FAST_FIXED(32,16), FLOAT")
-add_compile_definitions("SIZES=S(36,84)")
+# add_compile_definitions("TYPES=FAST_FIXED(32,16)")
+# add_compile_definitions("SIZES=S(36,84)")
+
+set(TYPES
+    ""
+    CACHE STRING "Types to precompile")
+add_compile_definitions(-DTYPES=${TYPES})
+
+set(SIZES
+    ""
+    CACHE STRING "Sizes to precompile")
+add_compile_definitions(-DSIZES=${SIZES})
 
 add_executable(Fluid main.cpp)
 target_link_libraries(Fluid PRIVATE cxxopts nlohmann_json::nlohmann_json)

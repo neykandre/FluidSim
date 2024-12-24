@@ -1,16 +1,30 @@
 #include "include/FluidSim.hpp"
 #include "include/Mapping.hpp"
-#include <array>
 #include <cxxopts.hpp>
 #include <iostream>
 #include <string>
-#include <string_view>
+#include <optional>
 
-std::variant<std::array<std::string, 4>, std::string> parse_arguments(int argc,
-                                                                      char* argv[]) {
+struct Parsed {
+    enum class Type {
+        READ_FIELD,
+        LOAD_SAVE
+    };
+    Type type;
+    std::string p_type;
+    std::string v_type;
+    std::string v_flow_type;
+    std::string field_path;
+    std::string load_path;
+    std::optional<size_t> num_threads;
+};
+
+Parsed parse_arguments(int argc, char* argv[]) {
     try {
+        Parsed parsed;
         cxxopts::Options options(
             "FluidSim", "Required parameters for the simulation (excluding help)");
+
         options.add_options()("h,help", "Display help")(
             "p-type", "Type of parameter p-type", cxxopts::value<std::string>())(
             "v-type", "Type of parameter v-type", cxxopts::value<std::string>())(
@@ -18,7 +32,8 @@ std::variant<std::array<std::string, 4>, std::string> parse_arguments(int argc,
             cxxopts::value<std::string>())("field-path", "Path to the field",
                                            cxxopts::value<std::string>())(
             "load-path", "Path to the saved simulation",
-            cxxopts::value<std::string>());
+            cxxopts::value<std::string>())("num-threads", "Number of threads",
+                                           cxxopts::value<size_t>());
 
         auto result = options.parse(argc, argv);
 
@@ -36,15 +51,20 @@ std::variant<std::array<std::string, 4>, std::string> parse_arguments(int argc,
         }
 
         if (result.count("load-path")) {
-            return result["load-path"].as<std::string>();
+            parsed.type      = Parsed::Type::LOAD_SAVE;
+            parsed.load_path = result["load-path"].as<std::string>();
         } else {
-            return std::array<std::string, 4>{
-                result["p-type"].as<std::string>(),
-                result["v-type"].as<std::string>(),
-                result["v-flow-type"].as<std::string>(),
-                result["field-path"].as<std::string>()
-            };
+            parsed.type        = Parsed::Type::READ_FIELD;
+            parsed.p_type      = result["p-type"].as<std::string>();
+            parsed.v_type      = result["v-type"].as<std::string>();
+            parsed.v_flow_type = result["v-flow-type"].as<std::string>();
+            parsed.field_path  = result["field-path"].as<std::string>();
         }
+        if (result.count("num-threads")) {
+            parsed.num_threads = result["num-threads"].as<size_t>();
+        }
+
+        return parsed;
 
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
@@ -61,28 +81,27 @@ static void signal_handler(int signal) {
 }
 
 int main(int argc, char** argv) {
-    // Fluid::Fixed<32, 16> a(0.1);
-    // Fluid::Fixed<64, 8> b(0.05);
-    // std::cout << (a < 0.01) << std::endl;
     auto parsed = parse_arguments(argc, argv);
+    // auto parsed = Parsed{.p_type="FAST_FIXED(32,16)", .v_type="FAST_FIXED(32,16)", .v_flow_type="FAST_FIXED(32,16)", .field_path="../base_field", .num_threads=3};
     Mapper mapped;
-    if (std::holds_alternative<std::string>(parsed)) {
-        mapped = Mapper{std::get<1>(parsed)};
+    if (parsed.type == Parsed::Type::LOAD_SAVE) {
+        mapped = Mapper{ parsed.load_path };
     } else {
-        auto [p_type, v_type, v_flow_type, path] = std::get<0>(parsed);
-        mapped = Mapper{ p_type, v_type, v_flow_type, path };
+        mapped = Mapper{ parsed.p_type, parsed.v_type, parsed.v_flow_type,
+                         parsed.field_path };
     }
 
     mapped.map_instance([&]<typename SimType> {
-        SimType sim(mapped.get_rows(), mapped.get_cols());
-        if (std::holds_alternative<std::string>(parsed)) {
-            std::ifstream file(std::get<1>(parsed));
+        SimType sim(mapped.get_rows(), mapped.get_cols(),
+                    parsed.num_threads.has_value() ? parsed.num_threads.value() : 1);
+        if (parsed.type == Parsed::Type::LOAD_SAVE) {
+            std::ifstream file(parsed.load_path);
             assert(file.is_open());
             file.ignore(std::numeric_limits<std::streamsize>::max(),
                         file.widen('\n'));
             sim.deserialize(file);
         } else {
-            sim.read_field(std::get<0>(parsed)[3]);
+            sim.read_field(parsed.field_path);
         }
 
         std::signal(SIGINT, signal_handler);
@@ -104,10 +123,6 @@ int main(int argc, char** argv) {
 
         sim.run();
     });
-    // auto p_type      = "FIXED(64,8)";
-    // auto v_type      = "FIXED(64,8)";
-    // auto v_flow_type = "FIXED(64,8)";
-    // auto path        = "../base_field";
 
     return 0;
 }

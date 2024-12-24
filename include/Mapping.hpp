@@ -126,22 +126,19 @@ static void signal_handler(int signal) {
                     const std::string& v_flow_type, const ::std::string& path)
         : m_p_type(p_type),
           m_v_type(v_type),
-          m_v_flow_type(v_flow_type) {
+          m_v_flow_type(v_flow_type),
+          m_rows{}, m_cols{} {
         std::ifstream file(path);
         assert(file.is_open());
-        size_t rows{}, cols{};
         while (!file.eof()) {
             std::string line;
             std::getline(file, line);
-            if (rows > 0) {
-                assert(cols == line.size());
+            if (m_rows > 0) {
+                assert(m_cols == line.size());
             }
-            rows++;
-            cols = line.size();
+            m_rows++;
+            m_cols = line.size();
         }
-
-        m_rows = rows;
-        m_cols = cols;
     }
 
     explicit Mapper(const std::string& load_path) {
