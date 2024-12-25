@@ -152,80 +152,6 @@ class FluidSim {
                                                                            start)
                          .count()
                   << " ms\n";
-        // auto total_start = std::chrono::high_resolution_clock::now();
-
-        // // Variables to store cumulative durations
-        // size_t total_external_forces_time = 0;
-        // size_t total_p_forces_time        = 0;
-        // size_t total_make_flow_time       = 0;
-        // size_t total_recalc_p_time        = 0;
-        // size_t total_make_step_time       = 0;
-
-        // for (; tick < TICKS; ++tick) {
-        //     auto start = std::chrono::high_resolution_clock::now();
-
-        //     // Measure apply_external_forces
-        //     auto ext_start = std::chrono::high_resolution_clock::now();
-        //     apply_external_forces();
-        //     auto ext_end = std::chrono::high_resolution_clock::now();
-        //     total_external_forces_time +=
-        //         std::chrono::duration_cast<std::chrono::microseconds>(ext_end -
-        //                                                               ext_start)
-        //             .count();
-
-        //     // Measure apply_p_forces
-        //     auto p_start = std::chrono::high_resolution_clock::now();
-        //     apply_p_forces();
-        //     auto p_end = std::chrono::high_resolution_clock::now();
-        //     total_p_forces_time +=
-        //         std::chrono::duration_cast<std::chrono::microseconds>(p_end -
-        //                                                               p_start)
-        //             .count();
-
-        //     // Measure make_flow_from_vel
-        //     auto flow_start = std::chrono::high_resolution_clock::now();
-        //     make_flow_from_vel();
-        //     auto flow_end = std::chrono::high_resolution_clock::now();
-        //     total_make_flow_time +=
-        //         std::chrono::duration_cast<std::chrono::microseconds>(flow_end -
-        //                                                               flow_start)
-        //             .count();
-
-        //     // Measure recalc_p
-        //     auto recalc_start = std::chrono::high_resolution_clock::now();
-        //     recalc_p();
-        //     auto recalc_end = std::chrono::high_resolution_clock::now();
-        //     total_recalc_p_time +=
-        //         std::chrono::duration_cast<std::chrono::microseconds>(recalc_end -
-        //                                                               recalc_start)
-        //             .count();
-
-        //     // Measure make_step
-        //     auto step_start = std::chrono::high_resolution_clock::now();
-        //     bool step_done  = make_step();
-        //     auto step_end   = std::chrono::high_resolution_clock::now();
-        //     total_make_step_time +=
-        //         std::chrono::duration_cast<std::chrono::microseconds>(step_end -
-        //                                                               step_start)
-        //             .count();
-        // }
-
-        // auto total_end = std::chrono::high_resolution_clock::now();
-
-        // // Output cumulative timings
-        // std::cout << "Total simulation time: "
-        //           << std::chrono::duration_cast<std::chrono::milliseconds>(
-        //                  total_end - total_start)
-        //                  .count()
-        //           << " ms\n";
-        // std::cout << "apply_external_forces total time: "
-        //           << total_external_forces_time << " µs\n";
-        // std::cout << "apply_p_forces total time: " << total_p_forces_time << "
-        // µs\n"; std::cout << "make_flow_from_vel total time: " <<
-        // total_make_flow_time
-        //           << " µs\n";
-        // std::cout << "recalc_p total time: " << total_recalc_p_time << " µs\n";
-        // std::cout << "make_step total time: " << total_make_step_time << " µs\n";
     }
 
     void serialize(std::ofstream& file) const {
@@ -595,7 +521,7 @@ class FluidSim {
     std::mt19937 rnd{ 1337 };
     std::uniform_real_distribution<float> dist{ 0, 1 };
     Arr_t<int> dirs;
-    static constexpr size_t TICKS = 1'000'000;
+    static constexpr size_t TICKS = 1'00;
     V_t g;
 
     void swap_with(int x, int y, int nx, int ny) {

@@ -4,6 +4,8 @@ build
 fluid_dirty.cpp
 field1
 fluid_dirty
+fluid_dirty_Ofast
 test_field
 sand.cpp
 save_*
+FieldGenerator.cpp
